@@ -1,0 +1,227 @@
+---
+
+author: "Masoumeh Shariat
+output:
+
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Illustration of the dataset
+Quarterly car sales are estimated from the same sample used for the Monthly car sales to estimate preliminary and final car sales in Quebec .The data is an open source data from 2000 to 2016 and downloaded from this website: https://data.worldbank.org/
+
+The table below shows the first 12 data (3 years), which are sorted by year and quarter.
+
+```{r ,message=FALSE}
+
+## read data
+data = read.csv("QUARTERLY CAR SALES.csv")
+df = data.frame(data)
+print(head(df,12))
+```
+
+
+The chart shows that sales increased significantly between the first(Q1) and second quarters(Q2), but decreased between the second and third(Q3) quarters. It has also increased again from the third quarter to the fourth(Q4) quarter. As we can see, during the first six years between 2000 and 2006, sales increased in the same way, but during 2007 and 2008, they had a significant decrease in all quarters, and after that, they increased again as in the previous trend. 
+
+```{r}
+## plot data
+
+plot(1:length(data$Quarter), y=data$Sales, type='l', col='violetred',
+     lwd = 2, ylab = 'Sales', xlab = 'Year', main = 'Quarterly car sales in Quebec', xaxt="n")
+axis(1, at = seq(4, length(data$Quarter), by = 4), labels = seq(2000,2016), )
+
+```
+
+
+
+```{r}
+quarters = unique(df$Quarter)
+cols =c('violetred','turquoise3','tan2','red')
+plot(x=2000:2016, xlim=c(2000,2016), ylim=c(min(df$Sales),max(df$Sales)),
+     ylab = 'Sales', xlab = 'Year')
+c = 1
+for(i in quarters){
+  lines(x=2000:2016, df$Sales[df$Quarter == i], col=cols[c], lwd=2)
+  c = c + 1}
+legend('left',legend = quarters, col = cols, lwd = 2)
+```
+
+### Preprosessed Data
+In this section, data preprocessing is done before use in models. To do this, the dummy_cols function is used to convert quarters to one-hot code. One-hot encoding is the process of converting a categorical variable with multiple categories into multiple variables, each with a value of 1 or 0.
+
+```{r,include=FALSE}
+library(fastDummies)
+library(dclone)
+library(R2jags)
+library(ggmcmc)
+library(MCMCvis)
+library(ggplot2)
+
+```
+
+```{r, message=FALSE}
+
+# create dummy data for model
+quarters = unique(df$Quarter)
+data$Year = data$Year - 1999
+data$Sales = data$Sales/10000
+df = cbind(data$Year, data$Sales, dummy_cols(data$Quarter))
+colnames(df) = c('Year','Sales','Quarter',quarters)
+processed_df = list('Sales'=df$Sales,'Year'=df$Year,'Q1'=df$`Q1`,'Q2'=df$`Q2`,
+             'Q3'=df$`Q3`,'Q4'=df$`Q4`,N = length(df$Sales))
+
+```
+
+### First Model
+Since the data has collected based on quarters of the year, so it can be concluded that we will have four linear regression models, which by combining these four models, a single model can be introduced as follows. $\alpha$ refers to intercept of the year and $\beta$ refers to the slope of the year.
+
+
+\begin{eqnarray*}
+Y_i \sim N(\mu_i, \tau2)
+\end{eqnarray*}
+
+\begin{eqnarray*}
+\mu_i = (\alpha_{Q1} + \beta_{Q1}*Year_i)Q1_i +(\alpha_{Q2} + \beta_{Q2}*Year_i)Q2_i+(\alpha_{Q3} + \beta_{Q3}*Year_i)Q3_i+(\alpha_{Q4} + \beta_{Q4}*Year_i)Q4_i
+\end{eqnarray*}
+
+
+``` {r}
+first_model = function(){
+  
+      # likelihood
+    for( i in 1 : N) {
+        Sales[i] ~ dnorm(mu[i],tau2)
+        mu[i] <- 
+          (alpha_Q1 + beta_Q1 * Year[i])*Q1[i] +(alpha_Q2 + beta_Q2 * Year[i])*Q2[i] +
+          (alpha_Q3 + beta_Q3 * Year[i])*Q3[i] +(alpha_Q4 + beta_Q4 * Year[i])*Q4[i]
+    }
+      # priors
+  alpha_Q1 ~ dunif(0,300);alpha_Q2 ~ dunif(0,300)
+  alpha_Q3 ~ dunif(0,300);alpha_Q4 ~ dunif(0,300)
+  beta_Q1 ~ dunif(-30,30);beta_Q2 ~ dunif(-30,30)
+  beta_Q3 ~ dunif(-30,30);beta_Q4 ~ dunif(-30,30)
+  tau2 ~ dgamma(1,0.5)
+}
+saved_modelI <- write.jags.model(first_model, filename = 'first_model.txt')
+first_params = c( "alpha_Q1",  "alpha_Q2",  "alpha_Q3", "alpha_Q4",  "beta_Q1",  "beta_Q2",  
+   "beta_Q3",  "beta_Q4","tau2")
+fit_first_model <- jags(data = processed_df, parameters.to.save = first_params,
+                        model.file =saved_modelI, n.chains = 2, n.iter = 20000,
+                        n.burnin = 5000)
+fit_first_model
+```
+
+### Convergence diagnostics
+
+``` {r}
+
+mcmclistI=as.mcmc(fit_first_model)
+MCMCtrace(mcmclistI,first_params,ISB = FALSE, 
+          exact = TRUE, 
+          iter = 4000, 
+          ind = TRUE, 
+          pdf = FALSE)
+```
+
+```{r , fig.height=30}
+ggs_autocorrelation(ggs(mcmclistI))
+```
+
+
+We can do summary() of an mcmc object to get summary statistics for the posterior.The results give the posterior means, posterior standard deviations,and posterior quantiles for each variable.The “naive” standard error is the standard error of the mean,which captures simulation error of the mean rather than posterior uncertainty.
+
+\begin{equation}
+\text { naive } S E=\frac{\text { Posterior } S D}{\sqrt{n}}
+\end{equation}
+
+The time-series standard error adjusts the “naive” standard error for autocorrelation.
+
+```{r}
+summary(mcmclistI)
+```
+
+
+### Second Model
+
+The purpose of the second model is to reduce the DIC, the best way to do this is to reduce the number of parameters. Therefore, according to the year added to the quarterly fluctuations, a general regression model is used.
+
+\begin{eqnarray*}
+Y_i \sim N(\mu_i, \tau2)
+\end{eqnarray*}
+
+
+\begin{eqnarray*}
+\mu_i = \beta*Year_i + (\beta_{Q1}+\gamma_{Q_1}Year_i^2)*Q1_i+(\beta_{Q2}+\gamma_{Q_2}Year_i^2*Q2_i+(\beta_{Q3}+\gamma_{Q_3}Year_i^2)*Q3_i+(\beta_{Q4}+\gamma_{Q_4}Year_i^2*Q4_i
+\end{eqnarray*}
+
+```{r}
+second_model= function(){
+  
+      # likelihood
+    for( i in 1 : N) {
+        Sales[i] ~ dnorm(mu[i],tau2)
+		mu[i] <-beta * Year[i]+
+		  (beta_Q1  + gamma_Q1 * Year[i]*Year[i])*Q1[i] +
+		  (beta_Q2 + gamma_Q2 * Year[i]*Year[i])*Q2[i] +
+		  (beta_Q3  + gamma_Q3 * Year[i]*Year[i])*Q3[i] +
+		  (beta_Q4  + gamma_Q4 * Year[i]*Year[i])*Q4[i]
+		  
+	}
+  
+  beta~dunif(-20,20)
+  gamma_Q1 ~ dunif(-20,20)
+  gamma_Q2 ~ dunif(-20,20)
+  gamma_Q3 ~ dunif(-20,20)
+  gamma_Q4 ~ dunif(-20,20)
+  
+  beta_Q1 ~ dunif(-20,20)
+  beta_Q2 ~ dunif(-20,20)
+  beta_Q3 ~ dunif(-20,20)
+  beta_Q4 ~ dunif(-20,20)
+  tau2 ~ dgamma(1,.05)
+  }
+
+saved_modelII <- write.jags.model(second_model, filename = 'second_model.txt')
+second_params = c("beta",paste('beta_',quarters, sep=''), paste('gamma_',quarters, sep=''),'tau2')
+processed_df2=processed_df
+processed_df2$Sales=50*log(processed_df2$Sales)
+fit_second_model <- jags(data = processed_df, parameters.to.save = second_params
+                         , model.file = saved_modelII,n.chains = 2, n.iter = 20000,
+                         n.burnin = 10000)
+fit_second_model
+```
+
+``` {r}
+
+mcmclistII=as.mcmc(fit_second_model)
+MCMCtrace(mcmclistII,second_params,ISB = FALSE, 
+          exact = TRUE, 
+          iter = 4000, 
+          ind = TRUE, 
+          pdf = FALSE)
+```
+
+```{r , fig.height=30}
+ggs_autocorrelation(ggs(mcmclistII))
+```
+
+```{r}
+summary(mcmclistII)
+```
+
+### Comparing models
+In this project, the Monte Carlo Markov (MCMC) chain approach was implemented on the sales data quarter.Moreover, , a linear regression model and a general linear model have been used. The MCMC value is checked by monitoring tracking graphs, auto-correlations,  density functions and summary of results for its convergence diagnostics. The deviance information criterion (DIC) and the number of parameters are used as criteria for comparing models. 
+
+```{r}
+
+cat(' First_Model' ,'\t',  'DIC=  ',fit_first_model$BUGSoutput$DIC,'\t',
+     'number of params=  ',length(fit_first_model$parameters.to.save),'\n',
+     'Second_Model' ,'\t',  'DIC=  ',fit_second_model$BUGSoutput$DIC,'\t',
+     'number of params=  ',length(fit_second_model$parameters.to.save))
+```
+
