@@ -31,7 +31,7 @@ The chart shows that sales increased significantly between the first(Q1) and sec
 ```{r}
 ## plot data
 
-plot(1:length(data$Quarter), y=data$Sales, type='l', col='violetred',
+plot(1:length(data$Quarter), y=data$Sales, type='l', col='green',
      lwd = 2, ylab = 'Sales', xlab = 'Year', main = 'Quarterly car sales in Quebec', xaxt="n")
 axis(1, at = seq(4, length(data$Quarter), by = 4), labels = seq(2000,2016), )
 
